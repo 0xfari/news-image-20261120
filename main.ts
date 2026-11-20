@@ -1,22 +1,24 @@
-// News-image entry (Node 22, standard library only).
+// news-image-20261120 v3 entry (Node 22+, standard library only).
 //
-// The deliverable is the PNG sitting next to this file. This program
-// checks it really is a PNG (non-empty, correct 8-byte signature) and
-// then writes it to <out>/entry.png, where <out> comes from
-// MAKEFUN_OUTPUT_DIR and defaults to the grader's /output.
+// Reads the entry.png next to this file, checks it really is a PNG,
+// and writes the identical bytes to $MAKEFUN_OUTPUT_DIR/entry.png
+// (default /output).
 //
-// The output directory can be a mount point in the grader, so it is
-// never deleted itself. Only whatever is already inside it is removed
-// before the fresh copy is written.
+// Pelajaran 37: the grader's /output is a MOUNTED directory. Removing
+// the directory itself throws EBUSY and fails the run, so this program
+// only ever deletes what is INSIDE the output directory, never the
+// directory. It also never uses copyFileSync: the PNG is validated
+// first, then written from the buffer that passed validation.
 
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The PNG signature: 137 'P' 'N' 'G' CR LF SUB LF.
-const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+// The 8-byte PNG signature: 137 'P' 'N' 'G' CR LF SUB LF.
+const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-const ENTRY_PATH = join(dirname(fileURLToPath(import.meta.url)), "entry.png");
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const PNG_PATH = join(SCRIPT_DIR, "entry.png");
 const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
 const OUTPUT_PATH = join(OUTPUT_DIR, "entry.png");
 
@@ -25,37 +27,47 @@ function die(reason: string): never {
   process.exit(1);
 }
 
-function loadEntryPng(): Buffer {
+// Byte-by-byte signature check; names the first mismatching index.
+function checkPngSignature(bytes: Buffer): void {
+  if (bytes.length < SIGNATURE.length) {
+    die(`entry.png is only ${bytes.length} bytes, shorter than the 8-byte PNG signature`);
+  }
+  for (let index = 0; index < SIGNATURE.length; index++) {
+    if (bytes[index] !== SIGNATURE[index]) {
+      die(
+        `entry.png is not a PNG: byte ${index} is 0x${bytes[index].toString(16).padStart(2, "0")}, ` +
+          `expected 0x${SIGNATURE[index].toString(16).padStart(2, "0")}`,
+      );
+    }
+  }
+}
+
+function loadPng(): Buffer {
   let bytes: Buffer;
   try {
-    bytes = readFileSync(ENTRY_PATH);
+    bytes = readFileSync(PNG_PATH);
   } catch (error) {
-    die(`cannot read entry.png: ${(error as Error).message}`);
+    return die(`cannot read ${PNG_PATH}: ${(error as Error).message}`);
   }
-
-  if (bytes.length === 0) {
-    die("entry.png is empty");
-  }
-
-  const badByte = PNG_SIGNATURE.findIndex((expected, i) => bytes[i] !== expected);
-  if (badByte !== -1) {
-    die(
-      `entry.png is not a PNG: byte ${badByte} is 0x${bytes[badByte].toString(16)} ` +
-        `but the PNG signature needs 0x${PNG_SIGNATURE[badByte].toString(16)}`,
-    );
-  }
-
+  checkPngSignature(bytes);
   return bytes;
 }
 
-function emptyOutputDir(dir: string): void {
+// Creates the output dir if missing, then deletes only its CONTENTS.
+// The directory itself is never removed: in the grader it is a mount
+// point, and removing a mount point throws EBUSY.
+function prepareOutputDir(dir: string): void {
   mkdirSync(dir, { recursive: true });
-  for (const child of readdirSync(dir)) {
-    rmSync(join(dir, child), { recursive: true, force: true });
+  for (const name of readdirSync(dir)) {
+    rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
-const png = loadEntryPng();
-emptyOutputDir(OUTPUT_DIR);
+const png = loadPng();
+prepareOutputDir(OUTPUT_DIR);
 writeFileSync(OUTPUT_PATH, png);
-console.log(`entry.png validated (${png.length} bytes) and written to ${OUTPUT_PATH}`);
+const outSize = statSync(OUTPUT_PATH).size;
+if (outSize !== png.length) {
+  die(`wrote ${outSize} bytes but entry.png is ${png.length} bytes`);
+}
+console.log(`entry.png OK (${png.length} bytes) -> ${OUTPUT_PATH}`);
