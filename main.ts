@@ -1,7 +1,7 @@
-// news-image-20261120 v4 entry (Node 22+, standard library only).
+// news-image-20261120 v5 entry (Node 22+, standard library only).
 //
 // Copies the entry.png beside this file to $MAKEFUN_OUTPUT_DIR/entry.png
-// (default /output) after checking it really is a PNG.
+// (default /output) after checking it really is a PNG of the right size.
 //
 // Pelajaran 37: the grader's /output is a MOUNTED directory. Removing the
 // directory itself throws EBUSY and fails the run, so this program only
@@ -12,6 +12,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const MAX_DIM = 1024;
+const MAX_BYTES = 1024 * 1024;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SOURCE = join(HERE, "entry.png");
@@ -23,12 +25,10 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
-function readEntry(): Buffer {
-  let data: Buffer;
-  try {
-    data = readFileSync(SOURCE);
-  } catch (err) {
-    fail(`cannot read ${SOURCE}: ${(err as Error).message}`);
+function checkPng(data: Buffer): { width: number; height: number } {
+  // The competition caps the image file at 1 MiB as well as 1024x1024.
+  if (data.length > MAX_BYTES) {
+    fail(`entry.png is ${data.length} bytes, over the 1 MiB cap`);
   }
   if (data.length < PNG_MAGIC.length) {
     fail(`entry.png is ${data.length} bytes, shorter than the PNG signature`);
@@ -45,24 +45,30 @@ function readEntry(): Buffer {
   }
   const width = data.readUInt32BE(16);
   const height = data.readUInt32BE(20);
-  if (width > 1024 || height > 1024) {
-    fail(`entry.png is ${width}x${height}, over the 1024x1024 cap`);
+  if (width > MAX_DIM || height > MAX_DIM) {
+    fail(`entry.png is ${width}x${height}, over the ${MAX_DIM}x${MAX_DIM} cap`);
   }
-  return data;
+  return { width, height };
 }
 
-function emptyDirContents(dir: string): void {
+function clearContents(dir: string): void {
   mkdirSync(dir, { recursive: true });
   for (const name of readdirSync(dir)) {
     rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
-const png = readEntry();
-emptyDirContents(OUT_DIR);
-writeFileSync(TARGET, png);
-const written = readFileSync(TARGET);
-if (!written.equals(png)) {
-  fail(`wrote ${written.length} bytes but entry.png is ${png.length} bytes`);
+let data: Buffer;
+try {
+  data = readFileSync(SOURCE);
+} catch (err) {
+  fail(`cannot read ${SOURCE}: ${(err as Error).message}`);
 }
-console.log(`entry.png OK (${png.length} bytes) -> ${TARGET}`);
+const { width, height } = checkPng(data);
+clearContents(OUT_DIR);
+writeFileSync(TARGET, data);
+const written = readFileSync(TARGET);
+if (!written.equals(data)) {
+  fail(`wrote ${written.length} bytes but entry.png is ${data.length} bytes`);
+}
+console.log(`entry.png OK (${width}x${height}, ${data.length} bytes) -> ${TARGET}`);
