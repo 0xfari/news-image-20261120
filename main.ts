@@ -1,73 +1,68 @@
-// news-image-20261120 v3 entry (Node 22+, standard library only).
+// news-image-20261120 v4 entry (Node 22+, standard library only).
 //
-// Reads the entry.png next to this file, checks it really is a PNG,
-// and writes the identical bytes to $MAKEFUN_OUTPUT_DIR/entry.png
-// (default /output).
+// Copies the entry.png beside this file to $MAKEFUN_OUTPUT_DIR/entry.png
+// (default /output) after checking it really is a PNG.
 //
-// Pelajaran 37: the grader's /output is a MOUNTED directory. Removing
-// the directory itself throws EBUSY and fails the run, so this program
-// only ever deletes what is INSIDE the output directory, never the
-// directory. It also never uses copyFileSync: the PNG is validated
-// first, then written from the buffer that passed validation.
+// Pelajaran 37: the grader's /output is a MOUNTED directory. Removing the
+// directory itself throws EBUSY and fails the run, so this program only
+// ever deletes what is INSIDE the output directory, never the directory.
 
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// The 8-byte PNG signature: 137 'P' 'N' 'G' CR LF SUB LF.
-const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
-const PNG_PATH = join(SCRIPT_DIR, "entry.png");
-const OUTPUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-const OUTPUT_PATH = join(OUTPUT_DIR, "entry.png");
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SOURCE = join(HERE, "entry.png");
+const OUT_DIR = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
+const TARGET = join(OUT_DIR, "entry.png");
 
-function die(reason: string): never {
-  console.error(`main.ts: ${reason}`);
+function fail(msg: string): never {
+  console.error(`main.ts: ${msg}`);
   process.exit(1);
 }
 
-// Byte-by-byte signature check; names the first mismatching index.
-function checkPngSignature(bytes: Buffer): void {
-  if (bytes.length < SIGNATURE.length) {
-    die(`entry.png is only ${bytes.length} bytes, shorter than the 8-byte PNG signature`);
+function readEntry(): Buffer {
+  let data: Buffer;
+  try {
+    data = readFileSync(SOURCE);
+  } catch (err) {
+    fail(`cannot read ${SOURCE}: ${(err as Error).message}`);
   }
-  for (let index = 0; index < SIGNATURE.length; index++) {
-    if (bytes[index] !== SIGNATURE[index]) {
-      die(
-        `entry.png is not a PNG: byte ${index} is 0x${bytes[index].toString(16).padStart(2, "0")}, ` +
-          `expected 0x${SIGNATURE[index].toString(16).padStart(2, "0")}`,
-      );
+  if (data.length < PNG_MAGIC.length) {
+    fail(`entry.png is ${data.length} bytes, shorter than the PNG signature`);
+  }
+  for (let i = 0; i < PNG_MAGIC.length; i++) {
+    if (data[i] !== PNG_MAGIC[i]) {
+      fail(`entry.png byte ${i} is 0x${data[i].toString(16)}, not a PNG`);
     }
   }
-}
-
-function loadPng(): Buffer {
-  let bytes: Buffer;
-  try {
-    bytes = readFileSync(PNG_PATH);
-  } catch (error) {
-    return die(`cannot read ${PNG_PATH}: ${(error as Error).message}`);
+  // IHDR chunk: width and height are big-endian uint32 at bytes 16..24.
+  // The competition caps the image at 1024x1024, so refuse anything bigger.
+  if (data.length < 24 || data.toString("ascii", 12, 16) !== "IHDR") {
+    fail("entry.png has no IHDR chunk where one is expected");
   }
-  checkPngSignature(bytes);
-  return bytes;
+  const width = data.readUInt32BE(16);
+  const height = data.readUInt32BE(20);
+  if (width > 1024 || height > 1024) {
+    fail(`entry.png is ${width}x${height}, over the 1024x1024 cap`);
+  }
+  return data;
 }
 
-// Creates the output dir if missing, then deletes only its CONTENTS.
-// The directory itself is never removed: in the grader it is a mount
-// point, and removing a mount point throws EBUSY.
-function prepareOutputDir(dir: string): void {
+function emptyDirContents(dir: string): void {
   mkdirSync(dir, { recursive: true });
   for (const name of readdirSync(dir)) {
     rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
-const png = loadPng();
-prepareOutputDir(OUTPUT_DIR);
-writeFileSync(OUTPUT_PATH, png);
-const outSize = statSync(OUTPUT_PATH).size;
-if (outSize !== png.length) {
-  die(`wrote ${outSize} bytes but entry.png is ${png.length} bytes`);
+const png = readEntry();
+emptyDirContents(OUT_DIR);
+writeFileSync(TARGET, png);
+const written = readFileSync(TARGET);
+if (!written.equals(png)) {
+  fail(`wrote ${written.length} bytes but entry.png is ${png.length} bytes`);
 }
-console.log(`entry.png OK (${png.length} bytes) -> ${OUTPUT_PATH}`);
+console.log(`entry.png OK (${png.length} bytes) -> ${TARGET}`);
